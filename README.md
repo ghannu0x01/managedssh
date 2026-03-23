@@ -2,6 +2,10 @@
 
 ManagedSSH is a terminal-first SSH connection manager built with Go, Cobra, and Bubble Tea. It helps you organize hosts, store encrypted credentials, and connect quickly from a guided TUI.
 
+## Dashboard Preview
+
+![ManagedSSH Dashboard](dashboard.jpg)
+
 ## Why ManagedSSH
 
 - Keep SSH hosts, users, and auth settings in one place.
@@ -21,6 +25,8 @@ ManagedSSH is a terminal-first SSH connection manager built with Go, Cobra, and 
 - Support for SSH key path or inline encrypted key data.
 - Passphrase-aware key handling, including save-on-success for key passphrases.
 - Master key rotation that re-encrypts all stored secrets.
+- Backup export with atomic writes.
+- Backup import with master key verification, validation checks, and overwrite confirmation.
 - Search and filtering in dashboard by alias, host, group, tags, and users.
 
 ## Requirements
@@ -60,6 +66,8 @@ make run
 - e: edit selected host
 - d: delete selected host (with confirmation)
 - enter: connect to selected host
+- x: export backup
+- i: import backup
 
 ## Security Model (Brief)
 
@@ -81,6 +89,13 @@ make tidy
 make install
 make clean
 ```
+
+Install behavior:
+
+- `make install` uses `go install .` when `GOBIN` or `GOPATH` is set.
+- If both are missing, it installs to `~/.local/bin`.
+- If `~/.local/bin` is not in your `PATH`, install prints:
+	`~/.local/bin is not in path please add it to path.`
 
 ## Project Layout
 

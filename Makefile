@@ -1,4 +1,5 @@
 APP := managedssh
+LOCAL_BIN := $(HOME)/.local/bin
 
 .PHONY: help build run test fmt tidy install clean
 
@@ -9,7 +10,7 @@ help:
 	@printf "  make test     Run tests\n"
 	@printf "  make fmt      Format Go files\n"
 	@printf "  make tidy     Tidy Go modules\n"
-	@printf "  make install  Install the binary to GOPATH/bin\n"
+	@printf "  make install  Install to GOBIN/GOPATH/bin, or ~/.local/bin fallback\n"
 	@printf "  make clean    Remove the built binary\n"
 
 build:
@@ -28,7 +29,18 @@ tidy:
 	go mod tidy
 
 install:
-	go install .
+	@if [ -n "$$GOBIN" ] || [ -n "$$GOPATH" ]; then \
+		go install .; \
+		printf "Installed via go install (GOBIN/GOPATH path).\n"; \
+	else \
+		mkdir -p "$(LOCAL_BIN)"; \
+		GOBIN="$(LOCAL_BIN)" go install .; \
+		printf "Installed to $(LOCAL_BIN).\n"; \
+		case ":$$PATH:" in \
+			*":$(LOCAL_BIN):"*) ;; \
+			*) printf "~/.local/bin is not in path please add it to path.\n" ;; \
+		esac; \
+	fi
 
 clean:
 	rm -f $(APP)
