@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -33,7 +34,10 @@ const (
 )
 
 type sshDoneMsg struct{ err error }
-type hostVerifyDoneMsg struct{ err error }
+type hostVerifyDoneMsg struct {
+	err  error
+	host host.Host
+}
 type hostTrustDoneMsg struct{ err error }
 type saveKeyPassDoneMsg struct{ err error }
 type dashboardTrustDoneMsg struct{ err error }
@@ -511,6 +515,8 @@ func (m model) handleHostVerifyDone(msg hostVerifyDoneMsg) (tea.Model, tea.Cmd) 
 		return m, nil
 	}
 
+	m.pendingHost = msg.host
+
 	if err := m.savePendingHost(); err != nil {
 		m.phase = phaseHostForm
 		m.formErr = "Failed to save: " + err.Error()
@@ -544,7 +550,8 @@ func (m *model) savePendingHost() error {
 
 func verifyHostCmd(h host.Host, encKey []byte) tea.Cmd {
 	return func() tea.Msg {
-		return hostVerifyDoneMsg{err: verifyHostBeforeSave(h, encKey)}
+		verifiedHost, err := verifyHostBeforeSave(h, encKey)
+		return hostVerifyDoneMsg{err: err, host: verifiedHost}
 	}
 }
 
@@ -557,18 +564,18 @@ func trustAndVerifyHostCmd(h host.Host, encKey []byte, unknown *sshclient.Unknow
 	}
 }
 
-func verifyHostBeforeSave(h host.Host, encKey []byte) error {
+func verifyHostBeforeSave(h host.Host, encKey []byte) (host.Host, error) {
 	for _, username := range h.AccountNames() {
 		_, resolved, ok := h.ResolveAccount(username)
 		if !ok {
-			return errors.New("missing account during verification")
+			return h, errors.New("missing account during verification")
 		}
 
 		var password []byte
 		if resolved.AuthType == "password" && len(resolved.Password) > 0 {
 			dec, err := vault.Decrypt(encKey, resolved.Password)
 			if err != nil {
-				return fmt.Errorf("failed to decrypt password for %s: %w", username, err)
+				return h, fmt.Errorf("failed to decrypt password for %s: %w", username, err)
 			}
 			password = dec
 		}
@@ -578,7 +585,7 @@ func verifyHostBeforeSave(h host.Host, encKey []byte) error {
 			dec, err := vault.Decrypt(encKey, resolved.EncKey)
 			if err != nil {
 				zeroBytes(password)
-				return fmt.Errorf("failed to decrypt SSH key for %s: %w", username, err)
+				return h, fmt.Errorf("failed to decrypt SSH key for %s: %w", username, err)
 			}
 			keyData = dec
 		}
@@ -596,15 +603,50 @@ func verifyHostBeforeSave(h host.Host, encKey []byte) error {
 		if err != nil {
 			var unknown *sshclient.UnknownHostError
 			if errors.As(err, &unknown) {
-				return unknown
+				return h, unknown
 			}
 			var needPass *sshclient.KeyPassphraseRequiredError
 			if errors.As(err, &needPass) {
 				continue
 			}
-			return fmt.Errorf("verification failed for %s: %w", username, err)
+			return h, fmt.Errorf("verification failed for %s: %w", username, err)
 		}
 	}
+
+	if err := importKeyMaterialFromPaths(&h, encKey); err != nil {
+		return h, err
+	}
+
+	return h, nil
+}
+
+func importKeyMaterialFromPaths(h *host.Host, encKey []byte) error {
+	if h == nil {
+		return nil
+	}
+
+	for i := range h.Accounts {
+		account := &h.Accounts[i]
+		if account.AuthType != "key" || account.KeyPath == "" {
+			continue
+		}
+
+		keyBytes, err := os.ReadFile(expandUserPath(account.KeyPath))
+		if err != nil {
+			return fmt.Errorf("failed to read SSH key for %s: %w", account.Username, err)
+		}
+
+		enc, err := vault.Encrypt(encKey, keyBytes)
+		zeroBytes(keyBytes)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt SSH key for %s: %w", account.Username, err)
+		}
+
+		account.EncKey = enc
+		account.KeyPath = ""
+	}
+
+	h.Normalize()
 	return nil
 }
 
