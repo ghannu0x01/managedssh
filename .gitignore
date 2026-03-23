@@ -27,7 +27,7 @@ go.work.sum
 # Credentials (never commit)
 *.enc
 credentials.enc
-backup/
+/backup/
 
 # OS
 .DS_Store
