@@ -30,14 +30,22 @@ const (
 
 func formInputIdx(focus int) int {
 	switch focus {
-	case fAlias: return 0
-	case fHostname: return 1
-	case fGroup: return 2
-	case fTags: return 3
-	case fPort: return 4
-	case fUsers: return 5
-	case fSelectedUserCredential: return 6
-	default: return -1
+	case fAlias:
+		return 0
+	case fHostname:
+		return 1
+	case fGroup:
+		return 2
+	case fTags:
+		return 3
+	case fPort:
+		return 4
+	case fUsers:
+		return 5
+	case fSelectedUserCredential:
+		return 6
+	default:
+		return -1
 	}
 }
 
@@ -92,9 +100,12 @@ func newHostFormInputs(alias, hostname, users string, port int, group string, ta
 	return inputs
 }
 
-func (m model) startHostForm(editID string) (model, tea.Cmd) {
+func (m model) startHostForm(editID string, duplicate bool) (model, tea.Cmd) {
 	m.phase = phaseHostForm
 	m.formEditing = editID
+	m.formDuplicating = duplicate
+	m.formSourceAlias = ""
+	m.formSourceHostname = ""
 	m.formFocus = fAlias
 	m.formErr = ""
 	m.formDefaultUser = ""
@@ -133,6 +144,12 @@ func (m model) startHostForm(editID string) (model, tea.Cmd) {
 			}
 			break
 		}
+	}
+
+	if duplicate {
+		m.formSourceAlias = alias
+		m.formSourceHostname = hostname
+		m.formEditing = ""
 	}
 
 	m.formInputs = newHostFormInputs(alias, hostname, users, port, group, tags)
@@ -217,12 +234,19 @@ func (m model) activeFormFocuses() []int {
 }
 
 func (m model) cycleFormFocus(dir int) (tea.Model, tea.Cmd) {
-	if idx := formInputIdx(m.formFocus); idx >= 0 { m.formInputs[idx].Blur() }
+	if idx := formInputIdx(m.formFocus); idx >= 0 {
+		m.formInputs[idx].Blur()
+	}
 	focuses := m.activeFormFocuses()
-	if len(focuses) == 0 { return m, nil }
+	if len(focuses) == 0 {
+		return m, nil
+	}
 	cur := 0
 	for i, focus := range focuses {
-		if focus == m.formFocus { cur = i; break }
+		if focus == m.formFocus {
+			cur = i
+			break
+		}
 	}
 	cur = (cur + dir + len(focuses)) % len(focuses)
 	m.formFocus = focuses[cur]
@@ -253,9 +277,31 @@ func (m model) submitHostForm() (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if alias == "" { m.formErr = "Alias is required"; return m, nil }
-	if hostname == "" { m.formErr = "Hostname is required"; return m, nil }
-	if len(users) == 0 { m.formErr = "At least one user is required"; return m, nil }
+	if alias == "" {
+		m.formErr = "Alias is required"
+		return m, nil
+	}
+	if hostname == "" {
+		m.formErr = "Hostname is required"
+		return m, nil
+	}
+	if len(users) == 0 {
+		m.formErr = "At least one user is required"
+		return m, nil
+	}
+	if m.formDuplicating {
+		sameAlias := strings.EqualFold(strings.TrimSpace(m.formSourceAlias), alias)
+		sameHostname := strings.EqualFold(strings.TrimSpace(m.formSourceHostname), hostname)
+		if sameAlias || sameHostname {
+			m.formErr = "To save a duplicate, change both alias and hostname/IP"
+			return m, nil
+		}
+	}
+	aliasConflict, hostnameConflict := m.identityConflicts(alias, hostname)
+	if aliasConflict || hostnameConflict {
+		m.formErr = identityConflictMessage(aliasConflict, hostnameConflict)
+		return m, nil
+	}
 
 	port := 22
 	if portStr != "" {
@@ -268,25 +314,28 @@ func (m model) submitHostForm() (tea.Model, tea.Cmd) {
 	}
 
 	h := host.Host{
-		Alias:           alias,
-		Hostname:        hostname,
-		Port:            port,
-		Group:           group,
-		Tags:            tags,
-		DefaultUser:     m.formDefaultUser,
-		Accounts:        make([]host.HostUser, 0, len(m.formUserConfigs)),
+		Alias:       alias,
+		Hostname:    hostname,
+		Port:        port,
+		Group:       group,
+		Tags:        tags,
+		DefaultUser: m.formDefaultUser,
+		Accounts:    make([]host.HostUser, 0, len(m.formUserConfigs)),
 	}
 
 	for _, cfg := range m.formUserConfigs {
 		account := host.HostUser{
-			Username:   cfg.Username,
-			AuthType:   cfg.AuthType,
+			Username: cfg.Username,
+			AuthType: cfg.AuthType,
 		}
 		if cfg.AuthType == "password" {
 			switch {
 			case cfg.Password != "":
 				enc, err := vault.Encrypt(m.encKey, []byte(cfg.Password))
-				if err != nil { m.formErr = "Failed to encrypt password for " + cfg.Username + ": " + err.Error(); return m, nil }
+				if err != nil {
+					m.formErr = "Failed to encrypt password for " + cfg.Username + ": " + err.Error()
+					return m, nil
+				}
 				account.EncPassword = enc
 			case len(cfg.ExistingEncPassword) > 0:
 				account.EncPassword = cloneFormBytes(cfg.ExistingEncPassword)
@@ -304,7 +353,10 @@ func (m model) submitHostForm() (tea.Model, tea.Cmd) {
 				}
 			case keyPlain != "":
 				enc, err := vault.Encrypt(m.encKey, []byte(keyPlain))
-				if err != nil { m.formErr = "Failed to encrypt SSH key for " + cfg.Username + ": " + err.Error(); return m, nil }
+				if err != nil {
+					m.formErr = "Failed to encrypt SSH key for " + cfg.Username + ": " + err.Error()
+					return m, nil
+				}
 				account.EncKey = enc
 			case cfg.ExistingKeyPath != "":
 				account.KeyPath = cfg.ExistingKeyPath
@@ -327,18 +379,24 @@ func (m model) submitHostForm() (tea.Model, tea.Cmd) {
 
 func (m model) viewHostForm() string {
 	title := "Add Host"
-	if m.formEditing != "" { title = "Edit Host" }
+	if m.formEditing != "" {
+		title = "Edit Host"
+	} else if m.formDuplicating {
+		title = "Duplicate Host"
+	}
 
 	formW := 90
 	formH := 38
-	colW := (formW - 6) / 2 
+	colW := (formW - 6) / 2
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("📝 "+title) + "\n\n")
 
 	renderFieldCol := func(focus int, label string, idx int, w int) string {
 		lbl := inputLabelStyle.Render(label)
-		if m.formFocus == focus { lbl = focusedLabel("▸ " + label) }
+		if m.formFocus == focus {
+			lbl = focusedLabel("▸ " + label)
+		}
 		field := m.formInputs[idx].View()
 		col := lipgloss.NewStyle().Width(w)
 		return col.Render(lbl + "\n" + field)
@@ -358,7 +416,9 @@ func (m model) viewHostForm() string {
 	b.WriteString(lipgloss.NewStyle().Foreground(subtle).Render(strings.Repeat("─", formW-4)) + "\n\n")
 
 	lbl := inputLabelStyle.Render("SSH Users")
-	if m.formFocus == fUsers { lbl = focusedLabel("▸ SSH Users") }
+	if m.formFocus == fUsers {
+		lbl = focusedLabel("▸ SSH Users")
+	}
 	b.WriteString(lbl + "\n")
 	b.WriteString(m.formInputs[5].View() + "\n")
 	b.WriteString(hintStyle.Render("  Comma-separated usernames. Example: main, ubuntu, deploy") + "\n\n")
@@ -377,19 +437,25 @@ func (m model) viewHostForm() string {
 
 	content := b.String()
 	lines := strings.Split(content, "\n")
-	for len(lines) < formH { lines = append(lines, "") }
+	for len(lines) < formH {
+		lines = append(lines, "")
+	}
 	content = strings.Join(lines[:formH], "\n")
 	return boxStyle.Width(formW).Render(content)
 }
 
 func (m model) renderSelectedUserSection() string {
 	user := m.currentFormUser()
-	if user == nil { return "" }
+	if user == nil {
+		return ""
+	}
 
 	var b strings.Builder
 
 	lbl := inputLabelStyle.Render("Select User to Configure")
-	if m.formFocus == fSelectedUser { lbl = focusedLabel("▸ Select User to Configure") }
+	if m.formFocus == fSelectedUser {
+		lbl = focusedLabel("▸ Select User to Configure")
+	}
 	b.WriteString(lbl + "\n\n")
 	b.WriteString("  " + m.renderUserTabs() + "\n")
 	if m.formFocus == fSelectedUser {
@@ -401,11 +467,15 @@ func (m model) renderSelectedUserSection() string {
 
 	var card strings.Builder
 	headerLabel := "👤 " + user.Username
-	if m.formDefaultUser == user.Username { headerLabel += " [★ Default User]" }
+	if m.formDefaultUser == user.Username {
+		headerLabel += " [★ Default User]"
+	}
 	card.WriteString(lipgloss.NewStyle().Foreground(highlight).Bold(true).Render(headerLabel) + "\n\n")
 
 	authLabel := inputLabelStyle.Render("Auth Mode")
-	if m.formFocus == fSelectedUserAuth { authLabel = focusedLabel("▸ Auth Mode") }
+	if m.formFocus == fSelectedUserAuth {
+		authLabel = focusedLabel("▸ Auth Mode")
+	}
 	card.WriteString(authLabel + "\n\n")
 	card.WriteString("  " + authChoice("SSH Key", user.AuthType == "key") + "\n")
 	card.WriteString("  " + authChoice("Password", user.AuthType == "password") + "\n")
@@ -416,7 +486,9 @@ func (m model) renderSelectedUserSection() string {
 	card.WriteString("\n")
 	if user.AuthType == "password" {
 		credLabel := inputLabelStyle.Render("Password")
-		if m.formFocus == fSelectedUserCredential { credLabel = focusedLabel("▸ Password") }
+		if m.formFocus == fSelectedUserCredential {
+			credLabel = focusedLabel("▸ Password")
+		}
 		card.WriteString(credLabel + "\n")
 		card.WriteString(m.formInputs[6].View() + "\n")
 		if m.formEditing != "" && len(user.ExistingEncPassword) > 0 {
@@ -424,7 +496,9 @@ func (m model) renderSelectedUserSection() string {
 		}
 	} else if user.AuthType == "key" {
 		credLabel := inputLabelStyle.Render("SSH Key")
-		if m.formFocus == fSelectedUserCredential { credLabel = focusedLabel("▸ SSH Key") }
+		if m.formFocus == fSelectedUserCredential {
+			credLabel = focusedLabel("▸ SSH Key")
+		}
 		card.WriteString(credLabel + "\n")
 		card.WriteString(m.formInputs[6].View() + "\n")
 		card.WriteString(hintStyle.Render("  Key path or paste private key") + "\n")
@@ -438,7 +512,9 @@ func (m model) renderSelectedUserSection() string {
 }
 
 func authChoice(label string, selected bool) string {
-	if selected { return selectedChip("● " + label) }
+	if selected {
+		return selectedChip("● " + label)
+	}
 	return lipgloss.NewStyle().Foreground(subtle).Render("○ " + label)
 }
 
@@ -468,10 +544,14 @@ func focusedLabel(label string) string {
 
 func (m *model) selectSelectedUserAuth(dir int) {
 	user := m.currentFormUser()
-	if user == nil { return }
+	if user == nil {
+		return
+	}
 	options := []string{"key", "password"}
 	index := 0
-	if user.AuthType == "password" { index = 1 }
+	if user.AuthType == "password" {
+		index = 1
+	}
 	index = (index + dir + len(options)) % len(options)
 	user.AuthType = options[index]
 	m.storeSelectedUserCredentialInput()
@@ -480,7 +560,9 @@ func (m *model) selectSelectedUserAuth(dir int) {
 }
 
 func (m *model) selectFormUser(delta int) {
-	if len(m.formUserConfigs) == 0 { return }
+	if len(m.formUserConfigs) == 0 {
+		return
+	}
 	m.storeSelectedUserCredentialInput()
 	m.formUserCursor = (m.formUserCursor + delta + len(m.formUserConfigs)) % len(m.formUserConfigs)
 	m.loadSelectedUserCredentialInput()
@@ -488,13 +570,17 @@ func (m *model) selectFormUser(delta int) {
 }
 
 func (m *model) currentFormUser() *formUserConfig {
-	if len(m.formUserConfigs) == 0 || m.formUserCursor >= len(m.formUserConfigs) { return nil }
+	if len(m.formUserConfigs) == 0 || m.formUserCursor >= len(m.formUserConfigs) {
+		return nil
+	}
 	return &m.formUserConfigs[m.formUserCursor]
 }
 
 func (m *model) storeSelectedUserCredentialInput() {
 	user := m.currentFormUser()
-	if user == nil { return }
+	if user == nil {
+		return
+	}
 	if user.AuthType == "password" {
 		user.Password = m.formInputs[6].Value()
 	} else {
@@ -505,7 +591,9 @@ func (m *model) storeSelectedUserCredentialInput() {
 func (m *model) loadSelectedUserCredentialInput() {
 	m.formInputs[6].SetValue("")
 	user := m.currentFormUser()
-	if user == nil { return }
+	if user == nil {
+		return
+	}
 	configureCredentialInput(&m.formInputs[6], user.AuthType, "Override")
 	if user.AuthType == "password" {
 		m.formInputs[6].SetValue(user.Password)
@@ -555,9 +643,14 @@ func (m *model) syncFormUsers() {
 	} else if len(parsed) > 0 {
 		found := false
 		for _, p := range parsed {
-			if p == m.formDefaultUser { found = true; break }
+			if p == m.formDefaultUser {
+				found = true
+				break
+			}
 		}
-		if !found { m.formDefaultUser = parsed[0] }
+		if !found {
+			m.formDefaultUser = parsed[0]
+		}
 	} else {
 		m.formDefaultUser = ""
 	}
@@ -569,8 +662,12 @@ func parseUsers(raw string) []string {
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
-		if part == "" { continue }
-		if _, ok := seen[part]; ok { continue }
+		if part == "" {
+			continue
+		}
+		if _, ok := seen[part]; ok {
+			continue
+		}
 		seen[part] = struct{}{}
 		out = append(out, part)
 	}
@@ -579,7 +676,9 @@ func parseUsers(raw string) []string {
 
 func splitKeyValue(raw string) (string, string) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" { return "", "" }
+	if raw == "" {
+		return "", ""
+	}
 	if strings.Contains(raw, "BEGIN ") || strings.Contains(raw, "\n") {
 		return "", strings.ReplaceAll(raw, "\n", "\n")
 	}
@@ -614,14 +713,18 @@ func (m *model) refreshPathSuggestions() {
 }
 
 func (m *model) cyclePathSuggestion(delta int) bool {
-	if len(m.formPathSuggestions) == 0 { return false }
+	if len(m.formPathSuggestions) == 0 {
+		return false
+	}
 	m.formPathSuggestIndex = (m.formPathSuggestIndex + delta + len(m.formPathSuggestions)) % len(m.formPathSuggestions)
 	return true
 }
 
 func (m *model) acceptPathSuggestion() bool {
 	input, ok := m.activePathInput()
-	if !ok || len(m.formPathSuggestions) == 0 { return false }
+	if !ok || len(m.formPathSuggestions) == 0 {
+		return false
+	}
 	suggestion := m.formPathSuggestions[m.formPathSuggestIndex]
 	input.SetValue(suggestion)
 	if m.formFocus == fSelectedUserCredential {
@@ -632,7 +735,9 @@ func (m *model) acceptPathSuggestion() bool {
 }
 
 func completePathSuggestions(raw string) []string {
-	if raw == "" { raw = "~/.ssh/" }
+	if raw == "" {
+		raw = "~/.ssh/"
+	}
 	if strings.Contains(raw, "BEGIN ") || strings.Contains(raw, "\n") {
 		return nil
 	}
@@ -644,22 +749,32 @@ func completePathSuggestions(raw string) []string {
 		dirPart = filepath.Dir(expanded)
 		prefix = filepath.Base(expanded)
 	}
-	if dirPart == "" { dirPart = "." }
+	if dirPart == "" {
+		dirPart = "."
+	}
 
 	entries, err := os.ReadDir(dirPart)
-	if err != nil { return nil }
+	if err != nil {
+		return nil
+	}
 
 	var matches []string
 	for _, entry := range entries {
 		name := entry.Name()
-		if prefix != "" && !strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) { continue }
+		if prefix != "" && !strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+			continue
+		}
 		full := filepath.Join(dirPart, name)
 		display := collapseUserPath(full)
-		if entry.IsDir() { display += string(os.PathSeparator) }
+		if entry.IsDir() {
+			display += string(os.PathSeparator)
+		}
 		matches = append(matches, display)
 	}
 	sort.Strings(matches)
-	if len(matches) > 5 { matches = matches[:5] }
+	if len(matches) > 5 {
+		matches = matches[:5]
+	}
 	return matches
 }
 
@@ -667,7 +782,9 @@ func expandUserPath(path string) string {
 	if path == "~" || strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err == nil {
-			if path == "~" { return home }
+			if path == "~" {
+				return home
+			}
 			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
 		}
 	}
@@ -676,8 +793,12 @@ func expandUserPath(path string) string {
 
 func collapseUserPath(path string) string {
 	home, err := os.UserHomeDir()
-	if err != nil || home == "" { return path }
-	if path == home { return "~" }
+	if err != nil || home == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
 	prefix := home + string(os.PathSeparator)
 	if strings.HasPrefix(path, prefix) {
 		return "~/" + strings.TrimPrefix(path, prefix)
@@ -686,10 +807,47 @@ func collapseUserPath(path string) string {
 }
 
 func cloneFormBytes(src []byte) []byte {
-	if len(src) == 0 { return nil }
+	if len(src) == 0 {
+		return nil
+	}
 	out := make([]byte, len(src))
 	copy(out, src)
 	return out
+}
+
+func (m model) identityConflicts(alias, hostname string) (bool, bool) {
+	alias = strings.TrimSpace(alias)
+	hostname = strings.TrimSpace(hostname)
+	aliasConflict := false
+	hostnameConflict := false
+	for _, existing := range m.store.Hosts {
+		if m.formEditing != "" && existing.ID == m.formEditing {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(existing.Alias), alias) {
+			aliasConflict = true
+		}
+		if strings.EqualFold(strings.TrimSpace(existing.Hostname), hostname) {
+			hostnameConflict = true
+		}
+		if aliasConflict && hostnameConflict {
+			break
+		}
+	}
+	return aliasConflict, hostnameConflict
+}
+
+func identityConflictMessage(aliasConflict, hostnameConflict bool) string {
+	switch {
+	case aliasConflict && hostnameConflict:
+		return "Alias and hostname/IP already exist. Change both before saving"
+	case aliasConflict:
+		return "A host with this alias already exists"
+	case hostnameConflict:
+		return "A host record for this hostname/IP already exists"
+	default:
+		return ""
+	}
 }
 
 func (m model) renderPathSuggestions() string {

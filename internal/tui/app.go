@@ -94,6 +94,9 @@ type model struct {
 	formInputs             []textinput.Model
 	formFocus              int
 	formEditing            string
+	formDuplicating        bool
+	formSourceAlias        string
+	formSourceHostname     string
 	formErr                string
 	formDefaultUser        string
 	formUserConfigs        []formUserConfig
@@ -875,7 +878,13 @@ func (m model) handleHostVerifyDone(msg hostVerifyDoneMsg) (tea.Model, tea.Cmd) 
 
 	if err := m.savePendingHost(); err != nil {
 		m.phase = phaseHostForm
-		m.formErr = "Failed to save: " + err.Error()
+		if errors.Is(err, host.ErrDuplicateAlias) {
+			m.formErr = "A host with this alias already exists"
+		} else if errors.Is(err, host.ErrDuplicateHostname) {
+			m.formErr = "A host record for this hostname/IP already exists"
+		} else {
+			m.formErr = "Failed to save: " + err.Error()
+		}
 		return m, nil
 	}
 

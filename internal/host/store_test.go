@@ -1,6 +1,10 @@
 package host
 
-import "testing"
+import (
+	"errors"
+	"path/filepath"
+	"testing"
+)
 
 func TestHostNormalizeMigratesLegacyFields(t *testing.T) {
 	h := Host{
@@ -95,5 +99,47 @@ func TestNormalizeClearsKeyPassphraseForPasswordAuth(t *testing.T) {
 	}
 	if len(h.Accounts[1].EncKeyPass) != 0 {
 		t.Fatalf("expected override key passphrase to clear, got %q", string(h.Accounts[1].EncKeyPass))
+	}
+}
+
+func TestStoreAddRejectsDuplicateIdentity(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{path: filepath.Join(dir, "hosts.json")}
+
+	if err := s.Add(Host{Alias: "Prod", Hostname: "10.0.0.5", Accounts: []HostUser{{Username: "root", AuthType: "key"}}}); err != nil {
+		t.Fatalf("expected first add to succeed, got %v", err)
+	}
+
+	err := s.Add(Host{Alias: "prod-copy", Hostname: "10.0.0.5", Accounts: []HostUser{{Username: "ubuntu", AuthType: "key"}}})
+	if !errors.Is(err, ErrDuplicateHostname) {
+		t.Fatalf("expected ErrDuplicateHostname, got %v", err)
+	}
+
+	err = s.Add(Host{Alias: " prod ", Hostname: "10.0.0.6", Accounts: []HostUser{{Username: "ubuntu", AuthType: "key"}}})
+	if !errors.Is(err, ErrDuplicateAlias) {
+		t.Fatalf("expected ErrDuplicateAlias, got %v", err)
+	}
+}
+
+func TestStoreUpdateRejectsDuplicateIdentity(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{path: filepath.Join(dir, "hosts.json")}
+
+	if err := s.Add(Host{Alias: "Prod", Hostname: "10.0.0.5", Accounts: []HostUser{{Username: "root", AuthType: "key"}}}); err != nil {
+		t.Fatalf("expected first add to succeed, got %v", err)
+	}
+	if err := s.Add(Host{Alias: "Staging", Hostname: "10.0.0.6", Accounts: []HostUser{{Username: "root", AuthType: "key"}}}); err != nil {
+		t.Fatalf("expected second add to succeed, got %v", err)
+	}
+
+	secondID := s.Hosts[1].ID
+	err := s.Update(secondID, Host{Alias: "staging-copy", Hostname: "10.0.0.5", Accounts: []HostUser{{Username: "ubuntu", AuthType: "key"}}})
+	if !errors.Is(err, ErrDuplicateHostname) {
+		t.Fatalf("expected ErrDuplicateHostname, got %v", err)
+	}
+
+	err = s.Update(secondID, Host{Alias: "prod", Hostname: "10.0.0.7", Accounts: []HostUser{{Username: "ubuntu", AuthType: "key"}}})
+	if !errors.Is(err, ErrDuplicateAlias) {
+		t.Fatalf("expected ErrDuplicateAlias, got %v", err)
 	}
 }

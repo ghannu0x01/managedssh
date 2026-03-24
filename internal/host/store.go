@@ -4,28 +4,34 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
+var (
+	ErrDuplicateAlias    = errors.New("host with same alias already exists")
+	ErrDuplicateHostname = errors.New("host with same hostname or ip already exists")
+)
+
 type Host struct {
-	ID                 string     `json:"id"`
-	Alias              string     `json:"alias"`
-	Hostname           string     `json:"hostname"`
-	Port               int        `json:"port"`
-	Group              string     `json:"group,omitempty"`
-	Tags               []string   `json:"tags,omitempty"`
-	DefaultUser        string     `json:"default_user,omitempty"`
-	Accounts           []HostUser `json:"accounts,omitempty"`
+	ID          string     `json:"id"`
+	Alias       string     `json:"alias"`
+	Hostname    string     `json:"hostname"`
+	Port        int        `json:"port"`
+	Group       string     `json:"group,omitempty"`
+	Tags        []string   `json:"tags,omitempty"`
+	DefaultUser string     `json:"default_user,omitempty"`
+	Accounts    []HostUser `json:"accounts,omitempty"`
 
 	// Legacy fields kept for backward compatibility with existing hosts.json.
-	DefaultAuthType    string     `json:"default_auth_type,omitempty"`
-	DefaultEncPassword []byte     `json:"default_enc_password,omitempty"`
-	DefaultKeyPath     string     `json:"default_key_path,omitempty"`
-	DefaultEncKey      []byte     `json:"default_enc_key,omitempty"`
-	DefaultEncKeyPass  []byte     `json:"default_enc_key_pass,omitempty"`
+	DefaultAuthType    string `json:"default_auth_type,omitempty"`
+	DefaultEncPassword []byte `json:"default_enc_password,omitempty"`
+	DefaultKeyPath     string `json:"default_key_path,omitempty"`
+	DefaultEncKey      []byte `json:"default_enc_key,omitempty"`
+	DefaultEncKeyPass  []byte `json:"default_enc_key_pass,omitempty"`
 
 	// Legacy fields kept for backward compatibility with existing hosts.json.
 	User        string   `json:"user,omitempty"`
@@ -94,6 +100,13 @@ func (s *Store) Save() error {
 }
 
 func (s *Store) Add(h Host) error {
+	aliasConflict, hostnameConflict := s.identityConflicts("", h.Alias, h.Hostname)
+	if aliasConflict {
+		return ErrDuplicateAlias
+	}
+	if hostnameConflict {
+		return ErrDuplicateHostname
+	}
 	if h.ID == "" {
 		id, err := genID()
 		if err != nil {
@@ -110,6 +123,13 @@ func (s *Store) Add(h Host) error {
 }
 
 func (s *Store) Update(id string, h Host) error {
+	aliasConflict, hostnameConflict := s.identityConflicts(id, h.Alias, h.Hostname)
+	if aliasConflict {
+		return ErrDuplicateAlias
+	}
+	if hostnameConflict {
+		return ErrDuplicateHostname
+	}
 	for i, existing := range s.Hosts {
 		if existing.ID == id {
 			h.ID = id
@@ -129,6 +149,28 @@ func (s *Store) Delete(id string) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) identityConflicts(excludeID, alias, hostname string) (bool, bool) {
+	alias = strings.TrimSpace(alias)
+	hostname = strings.TrimSpace(hostname)
+	aliasConflict := false
+	hostnameConflict := false
+	for _, existing := range s.Hosts {
+		if existing.ID == excludeID {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(existing.Alias), alias) {
+			aliasConflict = true
+		}
+		if strings.EqualFold(strings.TrimSpace(existing.Hostname), hostname) {
+			hostnameConflict = true
+		}
+		if aliasConflict && hostnameConflict {
+			break
+		}
+	}
+	return aliasConflict, hostnameConflict
 }
 
 func (s *Store) Filter(query string) []Host {
@@ -208,7 +250,10 @@ func (h *Host) Normalize() {
 	} else if h.DefaultUser != "" {
 		found := false
 		for _, n := range names {
-			if n == h.DefaultUser { found = true; break }
+			if n == h.DefaultUser {
+				found = true
+				break
+			}
 		}
 		if !found && len(names) > 0 {
 			h.DefaultUser = names[0]

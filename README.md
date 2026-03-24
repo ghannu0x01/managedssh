@@ -64,6 +64,7 @@ make run
 - j / k or arrow keys: move selection
 - a: add host
 - e: edit selected host
+- y: duplicate selected host
 - d: delete selected host (with confirmation)
 - enter: connect to selected host
 - x: export backup

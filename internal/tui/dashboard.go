@@ -95,12 +95,18 @@ func (m model) updateDashboardNormal(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.refreshFiltered()
 		}
 	case "a":
-		m, cmd := m.startHostForm("")
+		m, cmd := m.startHostForm("", false)
 		return m, cmd
 	case "e":
 		if len(m.filtered) > 0 {
 			h := m.filtered[m.hostCursor]
-			m, cmd := m.startHostForm(h.ID)
+			m, cmd := m.startHostForm(h.ID, false)
+			return m, cmd
+		}
+	case "y":
+		if len(m.filtered) > 0 {
+			h := m.filtered[m.hostCursor]
+			m, cmd := m.startHostForm(h.ID, true)
 			return m, cmd
 		}
 	case "d":
@@ -495,9 +501,10 @@ func (m model) renderCommands(maxW int) string {
 	}
 	return "  " + pad(cmd("/", "Search"), col) + cmd("l", "Lock Session") + "\n" +
 		"  " + pad(cmd("a", "Add"), col) + cmd("c", "Change Master Key") + "\n" +
-		"  " + pad(cmd("x", "Export Backup"), col) + cmd("i", "Import Backup") + "\n" +
+		"  " + pad(cmd("e", "Edit"), col) + cmd("y", "Duplicate") + "\n" +
 		"  " + pad(cmd("d", "Delete"), col) + cmd("⏎", "Connect") + "\n" +
-		"  " + pad(cmd("e", "Edit"), col) + cmd("q", "Quit")
+		"  " + pad(cmd("x", "Export Backup"), col) + cmd("i", "Import Backup") + "\n" +
+		"  " + cmd("q", "Quit")
 }
 
 func (m model) updateUserSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
